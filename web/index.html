@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5G Core SMF Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <header class="header">
+            <div class="logo">
+                <span class="pulse-dot"></span>
+                <h1>5G Core <span>SMF Monitor</span></h1>
+            </div>
+            <div class="sys-status">
+                <span class="badge active">SYS OK</span>
+                <span class="badge h2c">HTTP/2 h2c</span>
+                <span class="badge pfcp">PFCP (UDP)</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="dashboard-grid">
+            <!-- Left Panel: Control and Metrics -->
+            <div class="panel control-panel">
+                <h2>Control Panel</h2>
+                <div class="trigger-form">
+                    <div class="form-group">
+                        <label for="supi">Subscriber IMSI</label>
+                        <select id="supi">
+                            <option value="imsi-452040000000001">imsi-452040000000001 (Valid)</option>
+                            <option value="imsi-452040000000002">imsi-452040000000002 (Valid)</option>
+                            <option value="imsi-452040000000003">imsi-452040000000003 (Valid)</option>
+                            <option value="imsi-452040000000009">imsi-452040000000009 (Invalid)</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="dnn">DNN</label>
+                            <input type="text" id="dnn" value="v-internet">
+                        </div>
+                        <div class="form-group">
+                            <label for="pduId">Session ID</label>
+                            <input type="number" id="pduId" value="1" min="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sst">SST</label>
+                            <input type="number" id="sst" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="sd">SD</label>
+                            <input type="text" id="sd" value="000001">
+                        </div>
+                    </div>
+                    
+                    <div class="button-group">
+                        <button id="btnTrigger" class="btn primary">Establish PDU Session</button>
+                    </div>
+
+                    <div class="load-test-sec">
+                        <h3>Performance & Load Testing</h3>
+                        <p class="desc">Stress-test the SMF worker pool with concurrent requests.</p>
+                        <div class="button-group">
+                            <button id="btnLoad100" class="btn secondary">Trigger 100 Sessions</button>
+                            <button id="btnLoad1000" class="btn warning">Trigger 1,000 Sessions</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Panel: Network Diagram and Metrics -->
+            <div class="panel main-panel">
+                <!-- Metrics Bar -->
+                <div class="metrics-container">
+                    <div class="metric-card">
+                        <div class="metric-val" id="valTps">0</div>
+                        <div class="metric-label">Transactions / Sec</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-val" id="valLatency">0 ms</div>
+                        <div class="metric-label">Avg Latency</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-val success" id="valSuccess">0</div>
+                        <div class="metric-label">Established</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-val danger" id="valFailed">0</div>
+                        <div class="metric-label">Failed</div>
+                    </div>
+                </div>
+
+                <!-- Interactive Network Topology -->
+                <div class="network-diagram-box">
+                    <h2>Live 5GC Network Flow</h2>
+                    <div class="topology">
+                        <!-- UDM -->
+                        <div class="node" id="nodeUDM">
+                            <div class="node-icon">💾</div>
+                            <div class="node-name">UDM (8082)</div>
+                        </div>
+
+                        <!-- AMF -->
+                        <div class="node" id="nodeAMF">
+                            <div class="node-icon">📡</div>
+                            <div class="node-name">AMF (8080)</div>
+                        </div>
+
+                        <!-- SMF -->
+                        <div class="node center-node" id="nodeSMF">
+                            <div class="node-icon">⚙️</div>
+                            <div class="node-name">SMF (8081)</div>
+                            <div class="worker-count">Pool: Active</div>
+                        </div>
+
+                        <!-- UPF -->
+                        <div class="node" id="nodeUPF">
+                            <div class="node-icon">⚡</div>
+                            <div class="node-name">UPF (8805 UDP)</div>
+                        </div>
+
+                        <!-- SVG Connectors -->
+                        <svg class="connectors">
+                            <!-- AMF -> SMF -->
+                            <path id="pathAMF-SMF" d="M120,240 L280,240" />
+                            <!-- SMF -> UDM -->
+                            <path id="pathSMF-UDM" d="M300,200 L300,80" />
+                            <!-- SMF -> UPF -->
+                            <path id="pathSMF-UPF" d="M320,240 L480,240" />
+                        </svg>
+
+                        <!-- Floating Messages (Overlay indicators) -->
+                        <div class="msg-indicator" id="indAMF-SMF">CreateContext</div>
+                        <div class="msg-indicator" id="indSMF-UDM">GetSubData</div>
+                        <div class="msg-indicator" id="indSMF-UPF">PFCP Session</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Panel: Session List -->
+            <div class="panel list-panel">
+                <h2>Active PDU Sessions</h2>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Context Reference</th>
+                                <th>Subscriber (SUPI)</th>
+                                <th>DNN</th>
+                                <th>S-NSSAI</th>
+                                <th>IP Address</th>
+                                <th>Status</th>
+                                <th>Last Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sessionTableBody">
+                            <tr>
+                                <td colspan="7" class="empty-state">No active sessions yet. Trigger one to start.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Right Panel: Live Event Stream -->
+            <div class="panel log-panel">
+                <h2>Live Event Stream</h2>
+                <div class="log-console" id="logConsole">
+                    <div class="log-line info">SYS | System initialized. Waiting for events...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Core state
+        const sessions = new Map();
+        const logConsole = document.getElementById('logConsole');
+        const sessionTableBody = document.getElementById('sessionTableBody');
+
+        // Connect to Server Sent Events (SSE)
+        const eventSource = new EventSource('/dashboard/stream');
+
+        eventSource.onopen = () => {
+            logEvent("SYS", "Real-time Event Stream connection established.", "success");
+        };
+
+        eventSource.onerror = (err) => {
+            logEvent("SYS", "Event Stream disconnected. Reconnecting...", "danger");
+        };
+
+        // Handle incoming ping
+        eventSource.addEventListener('ping', (e) => {
+            console.log("SSE Ping:", e.data);
+        });
+
+        // Handle session updates
+        eventSource.addEventListener('session_update', (e) => {
+            const sess = JSON.parse(e.data);
+            sessions.set(sess.smContextRef, sess);
+            updateSessionTable();
+            animateFlow(sess);
+            logEvent("SMF", `Session ${sess.smContextRef.substring(9, 17)}... status changed to ${sess.status} [IP: ${sess.ipAddress || 'None'}]`, "info");
+        });
+
+        // Handle metrics updates
+        eventSource.addEventListener('metrics', (e) => {
+            const metrics = JSON.parse(e.data);
+            document.getElementById('valTps').textContent = metrics.tps;
+            document.getElementById('valLatency').textContent = metrics.avgLatencyMs.toFixed(1) + ' ms';
+            document.getElementById('valSuccess').textContent = metrics.successCount;
+            document.getElementById('valFailed').textContent = metrics.failCount;
+        });
+
+        // Log events into console
+        function logEvent(source, msg, type = "info") {
+            const line = document.createElement('div');
+            line.className = `log-line ${type}`;
+            const time = new Date().toLocaleTimeString();
+            line.innerHTML = `<span class="time">${time}</span> <span class="source">${source}</span> | ${msg}`;
+            logConsole.appendChild(line);
+            logConsole.scrollTop = logConsole.scrollHeight;
+
+            // Keep console short
+            while (logConsole.childElementCount > 100) {
+                logConsole.removeChild(logConsole.firstChild);
+            }
+        }
+
+        // Render session table
+        function updateSessionTable() {
+            if (sessions.size === 0) {
+                sessionTableBody.innerHTML = `<tr><td colspan="7" class="empty-state">No active sessions yet. Trigger one to start.</td></tr>`;
+                return;
+            }
+
+            const sorted = Array.from(sessions.values()).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+            sessionTableBody.innerHTML = sorted.map(s => {
+                const sNssai = `SST:${s.sst} SD:${s.sd}`;
+                const date = new Date(s.updatedAt).toLocaleTimeString();
+                return `
+                    <tr>
+                        <td class="ref" title="${s.smContextRef}">${s.smContextRef.substring(9, 25)}...</td>
+                        <td>${s.supi}</td>
+                        <td>${s.dnn}</td>
+                        <td>${sNssai}</td>
+                        <td><span class="ip">${s.ipAddress || '--.--.--.--'}</span></td>
+                        <td><span class="status-badge ${s.status.toLowerCase()}">${s.status}</span></td>
+                        <td>${date}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Animate Network Diagram based on state
+        function animateFlow(sess) {
+            const amf = document.getElementById('nodeAMF');
+            const smf = document.getElementById('nodeSMF');
+            const udm = document.getElementById('nodeUDM');
+            const upf = document.getElementById('nodeUPF');
+
+            const pAmfSmf = document.getElementById('pathAMF-SMF');
+            const pSmfUdm = document.getElementById('pathSMF-UDM');
+            const pSmfUpf = document.getElementById('pathSMF-UPF');
+
+            const iAmfSmf = document.getElementById('indAMF-SMF');
+            const iSmfUdm = document.getElementById('indSMF-UDM');
+            const iSmfUpf = document.getElementById('indSMF-UPF');
+
+            resetNodesAndPaths();
+
+            if (sess.status === "PENDING") {
+                // Step 3: AMF -> SMF
+                highlightNode(amf);
+                highlightNode(smf);
+                triggerPathAnimation(pAmfSmf, "forward");
+                showIndicator(iAmfSmf, "CreateContext Request");
+
+                // Step 4: SMF -> UDM
+                setTimeout(() => {
+                    highlightNode(udm);
+                    triggerPathAnimation(pSmfUdm, "forward");
+                    showIndicator(iSmfUdm, "Get Subscription");
+                }, 300);
+
+            } else if (sess.status === "CREATING") {
+                // Step 5: SMF -> AMF
+                highlightNode(smf);
+                highlightNode(amf);
+                triggerPathAnimation(pAmfSmf, "reverse");
+                showIndicator(iAmfSmf, "201 Context Created");
+
+                // Step 10a: SMF -> UPF
+                setTimeout(() => {
+                    highlightNode(upf);
+                    triggerPathAnimation(pSmfUpf, "forward");
+                    showIndicator(iSmfUpf, "PFCP Est Request");
+                }, 400);
+
+            } else if (sess.status === "ACTIVE") {
+                // Step 10b: UPF -> SMF
+                highlightNode(upf);
+                highlightNode(smf);
+                triggerPathAnimation(pSmfUpf, "reverse");
+                showIndicator(iSmfUpf, "PFCP Response OK");
+
+                // Step 11: SMF -> AMF
+                setTimeout(() => {
+                    highlightNode(amf);
+                    triggerPathAnimation(pAmfSmf, "forward");
+                    showIndicator(iAmfSmf, "N1N2 Msg Transfer");
+                }, 300);
+
+            } else if (sess.status === "ACTIVATING") {
+                // Step 15: AMF -> SMF modify
+                highlightNode(amf);
+                highlightNode(smf);
+                triggerPathAnimation(pAmfSmf, "forward");
+                showIndicator(iAmfSmf, "Modify Request");
+
+                // Step 16a: SMF -> UPF modify
+                setTimeout(() => {
+                    highlightNode(upf);
+                    triggerPathAnimation(pSmfUpf, "forward");
+                    showIndicator(iSmfUpf, "PFCP Mod Request");
+                }, 300);
+
+            } else if (sess.status === "CONNECTED") {
+                // Step 16b: UPF -> SMF OK
+                highlightNode(upf);
+                highlightNode(smf);
+                triggerPathAnimation(pSmfUpf, "reverse");
+                showIndicator(iSmfUpf, "PFCP Mod Response");
+
+                // Step 17: SMF -> AMF response
+                setTimeout(() => {
+                    highlightNode(amf);
+                    triggerPathAnimation(pAmfSmf, "reverse");
+                    showIndicator(iAmfSmf, "Update Response OK");
+                }, 300);
+            } else if (sess.status === "FAILED") {
+                highlightNode(smf, true);
+                logEvent("SMF", `Session ${sess.smContextRef.substring(9, 17)}... processing failed.`, "danger");
+            }
+        }
+
+        function highlightNode(el, isError = false) {
+            el.classList.add(isError ? 'error-active' : 'active');
+            setTimeout(() => el.classList.remove('active', 'error-active'), 1500);
+        }
+
+        function triggerPathAnimation(pathEl, dir) {
+            pathEl.className.baseVal = `active-${dir}`;
+            setTimeout(() => pathEl.className.baseVal = '', 1500);
+        }
+
+        function showIndicator(el, text) {
+            el.textContent = text;
+            el.classList.add('visible');
+            setTimeout(() => el.classList.remove('visible'), 1500);
+        }
+
+        function resetNodesAndPaths() {
+            // Nothing special, timeouts handle cleanups
+        }
+
+        // Trigger action
+        document.getElementById('btnTrigger').addEventListener('click', async () => {
+            const supi = document.getElementById('supi').value;
+            const dnn = document.getElementById('dnn').value;
+            const pduSessionId = parseInt(document.getElementById('pduId').value);
+            const sst = parseInt(document.getElementById('sst').value);
+            const sd = document.getElementById('sd').value;
+
+            // Increment session ID for next click
+            document.getElementById('pduId').value = pduSessionId + 1;
+
+            logEvent("DASHBOARD", `Sending trigger for ${supi} (PDU ID: ${pduSessionId})...`, "info");
+            
+            try {
+                const res = await fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ supi, gpsi: "msisdn-84900000001", pduSessionId, dnn, sst, sd })
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    logEvent("AMF", `CreateSMContext Success! Ref: ${data.smContextRef.substring(9, 25)}...`, "success");
+                } else {
+                    logEvent("AMF", `Establishment rejected: ${data.cause || 'Unknown Error'}`, "danger");
+                }
+            } catch (err) {
+                logEvent("DASHBOARD", `Network request failed: ${err.message}`, "danger");
+            }
+        });
+
+        // Load test runner
+        async function runLoadTest(count) {
+            logEvent("DASHBOARD", `Starting Load Test: Triggering ${count} concurrent session requests...`, "warning");
+            
+            const supiOptions = [
+                "imsi-452040000000001",
+                "imsi-452040000000002",
+                "imsi-452040000000003"
+            ];
+            
+            let pduStart = parseInt(document.getElementById('pduId').value);
+            document.getElementById('pduId').value = pduStart + count;
+
+            const promises = [];
+            const start = performance.now();
+
+            for (let i = 0; i < count; i++) {
+                const supi = supiOptions[i % supiOptions.length];
+                const pduId = pAmfSmfSession = pduStart + i;
+                
+                // Fire and forget requests
+                promises.push(
+                    fetch('/api/trigger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            supi, 
+                            gpsi: "msisdn-84900000001", 
+                            pduSessionId: pduId, 
+                            dnn: "v-internet", 
+                            sst: 1, 
+                            sd: (i%3===0) ? "000001" : ((i%3===1) ? "000002" : "000003")
+                        })
+                    }).catch(e => console.error("Request failed", e))
+                );
+
+                // Small yield every 50 requests to prevent event loop choking
+                if (i % 50 === 0) {
+                    await new Promise(r => setTimeout(r, 1));
+                }
+            }
+
+            Promise.all(promises).then(() => {
+                const elapsed = (performance.now() - start) / 1000;
+                logEvent("DASHBOARD", `Load Test completed! Sent ${count} requests in ${elapsed.toFixed(2)}s.`, "success");
+            });
+        }
+
+        document.getElementById('btnLoad100').addEventListener('click', () => runLoadTest(100));
+        document.getElementById('btnLoad1000').addEventListener('click', () => runLoadTest(1000));
+
+        // Load initial session table
+        async function fetchInitialSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                if (res.ok) {
+                    const list = await res.json();
+                    if (list) {
+                        list.forEach(s => sessions.set(s.smContextRef, s));
+                        updateSessionTable();
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load sessions", e);
+            }
+        }
+        
+        fetchInitialSessions();
+    </script>
+</body>
+</html>
