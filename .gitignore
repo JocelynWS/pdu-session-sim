@@ -33,15 +33,15 @@ go.work.sum
 .env.*.local
 
 # Compiled project binaries
-amf-nf
-smf-nf
-udm-nf
-upf-nf
-amf
-smf
-udm
-upf
-simulator
+/amf-nf
+/smf-nf
+/udm-nf
+/upf-nf
+/amf
+/smf
+/udm
+/upf
+/simulator
 
 # Note files
 *.PDF
