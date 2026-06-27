@@ -1,0 +1,17 @@
+SMF Resource Usage Report
+Generated at: 2026-06-27 08:25:20
+PID: 8745
+Command: go run cmd/smf/main.go
+Samples: 192
+Interval seconds: 1
+
+CPU Average (%): 0.01
+CPU Peak (%): 0.1
+Memory Average (%): 0.10
+Memory Peak (%): 0.1
+RSS Average (MB): 23.09
+RSS Peak (MB): 26.84
+VSZ Average (MB): 1212.19
+VSZ Peak (MB): 1212.19
+
+CSV detail: monitor_reports/smf_resource_20260627_082204.csv

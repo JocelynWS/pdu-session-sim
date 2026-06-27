@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,21 +14,28 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"smf/internal/amf"
+	"smf/pkg/config"
 	"smf/pkg/logger"
 )
 
 func main() {
+	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
 	logger.InitLogger()
 	defer logger.Log.Sync()
 
-	logger.Log.Info("Starting AMF Network Function...")
-
-	smfBaseUrl := os.Getenv("SMF_BASE_URL")
-	if smfBaseUrl == "" {
-		smfBaseUrl = "http://localhost:8081"
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
 	}
 
-	handler := amf.NewHandler(smfBaseUrl)
+	logger.Log.Info("Starting AMF Network Function...",
+		zap.String("listenAddr", cfg.AMF.ListenAddr),
+		zap.String("smfBaseUrl", cfg.AMF.SmfBaseUrl))
+
+	handler := amf.NewHandler(cfg.AMF.SmfBaseUrl)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.HealthCheck)
@@ -35,12 +44,12 @@ func main() {
 
 	h2s := &http2.Server{}
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    cfg.AMF.ListenAddr,
 		Handler: h2c.NewHandler(mux, h2s),
 	}
 
 	go func() {
-		logger.Log.Info("AMF HTTP/2 h2c server listening on port 8080")
+		logger.Log.Info("AMF HTTP/2 h2c server listening", zap.String("addr", cfg.AMF.ListenAddr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("AMF Server failed to start", zap.Error(err))
 		}

@@ -19,6 +19,7 @@ type SessionRepository interface {
 	UpdateSessionStatus(ref string, status string) error
 	UpdateSessionStatusAndIP(ref string, status string, ip string) error
 	GetAllSessions() ([]*models.PDUSession, error)
+	CountByStatus() (active, pending, failed int64)
 }
 
 // InMemoryRepository represents an in-memory session database.
@@ -111,6 +112,8 @@ func NewPostgresRepository(connStr string) (*PostgresRepository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse connection string: %w", err)
 	}
+	config.MaxConns = 40
+	config.MinConns = 10
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -217,4 +220,50 @@ func InitRepository(connStr string) SessionRepository {
 
 	logger.Log.Info("Successfully connected to PostgreSQL for SMF")
 	return repo
+}
+
+func (r *InMemoryRepository) CountByStatus() (active, pending, failed int64) {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    for _, s := range r.sessions {
+        switch s.Status {
+        case "ACTIVE":
+            active++
+        case "PENDING", "CREATING":
+            pending++
+        case "FAILED":
+            failed++
+        }
+    }
+    return
+}
+
+func (r *PostgresRepository) CountByStatus() (active, pending, failed int64) {
+	query := `
+		SELECT status, COUNT(*) 
+		FROM pdu_sessions 
+		WHERE status IN ('ACTIVE', 'PENDING', 'CREATING', 'FAILED') 
+		GROUP BY status
+	`
+	rows, err := r.pool.Query(context.Background(), query)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err == nil {
+			switch status {
+			case "ACTIVE":
+				active += count
+			case "PENDING", "CREATING":
+				pending += count
+			case "FAILED":
+				failed += count
+			}
+		}
+	}
+	return
 }

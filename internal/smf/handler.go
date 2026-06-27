@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"smf/pkg/logger"
 	"smf/pkg/models"
 )
+
+// smContextCounter dùng để sinh smContextRef nội bộ (không cần UUID)
+var smContextCounter uint64
 
 type Handler struct {
 	repo SessionRepository
@@ -35,8 +38,8 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 		zap.String("dnn", req.Dnn),
 		zap.Int("pduSessionId", req.PduSessionId))
 
-	// Generate UUID for smContextRef
-	ref := fmt.Sprintf("urn:uuid:%s", uuid.New().String())
+	// Generate internal smContextRef (không cần UUID, chỉ dùng nội bộ)
+	ref := fmt.Sprintf("smctx-%d", atomic.AddUint64(&smContextCounter, 1))
 
 	// Save session in DB as PENDING
 	session := &models.PDUSession{
@@ -66,11 +69,12 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 
 	// Step 4: SMF -> UDM: Subscription retrieval
 	logger.Log.Info("SMF: Querying UDM for subscriber profile (Step 4)", zap.String("supi", req.Supi))
-	
+
 	udmUrl := fmt.Sprintf("http://localhost:8082/nudm-sdm/v2/%s/sm-data", req.Supi)
 	udmReq, err := http.NewRequest("GET", udmUrl, nil)
 	if err != nil {
 		logger.Log.Error("SMF: Failed to create UDM request", zap.Error(err))
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "INTERNAL_ERROR", err.Error())
 		h.failSession(w, ref, "INTERNAL_ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -78,6 +82,7 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 	udmResp, err := Orc.h2Client.Do(udmReq)
 	if err != nil {
 		logger.Log.Error("SMF: Failed to communicate with UDM", zap.Error(err))
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "UDM_UNAVAILABLE", err.Error())
 		h.failSession(w, ref, "UDM_UNAVAILABLE", http.StatusServiceUnavailable)
 		return
 	}
@@ -85,12 +90,14 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 
 	if udmResp.StatusCode == http.StatusNotFound {
 		logger.Log.Warn("SMF: UDM returned subscriber not found (404)")
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "SUBSCRIPTION_NOT_FOUND", "UDM returned subscriber not found")
 		h.failSession(w, ref, "SUBSCRIPTION_NOT_FOUND", http.StatusNotFound)
 		return
 	}
 
 	if udmResp.StatusCode != http.StatusOK {
 		logger.Log.Error("SMF: UDM returned unexpected status", zap.Int("status", udmResp.StatusCode))
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "UDM_ERROR", fmt.Sprintf("UDM returned HTTP %d", udmResp.StatusCode))
 		h.failSession(w, ref, "UDM_ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -98,6 +105,7 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 	var subData models.SubscriptionData
 	if err := json.NewDecoder(udmResp.Body).Decode(&subData); err != nil {
 		logger.Log.Error("SMF: Failed to decode UDM response", zap.Error(err))
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "INTERNAL_ERROR", err.Error())
 		h.failSession(w, ref, "INTERNAL_ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -108,6 +116,7 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 			zap.String("reqDnn", req.Dnn), zap.String("subDnn", subData.Dnn),
 			zap.Int("reqSst", req.SNssai.Sst), zap.Int("subSst", subData.SNssai.Sst),
 			zap.String("reqSd", req.SNssai.Sd), zap.String("subSd", subData.SNssai.Sd))
+		Orc.NotifyAMFSessionFailure(ref, req.Supi, "SUBSCRIPTION_MISMATCH", "UDM subscription data does not match requested DNN/S-NSSAI")
 		h.failSession(w, ref, "SUBSCRIPTION_MISMATCH", http.StatusBadRequest)
 		return
 	}
@@ -148,64 +157,15 @@ func (h *Handler) UpdateSMContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Log.Info("SMF: Received UpdateSMContext Request (Step 15)",
+	// Bước 6+ (Update SM Context) chưa cần implement - chỉ ack lại AMF
+	logger.Log.Info("SMF: Received UpdateSMContext (stub - not implemented beyond Step 5)",
 		zap.String("ref", ref),
 		zap.String("upCnxState", req.UpCnxState))
 
-	session, err := h.repo.GetSession(ref)
-	if err != nil {
-		logger.Log.Warn("SMF: Session not found", zap.String("ref", ref))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "session not found"})
-		return
-	}
-
-	// Update status to ACTIVATING
-	h.repo.UpdateSessionStatus(ref, "ACTIVATING")
-	if Hub != nil {
-		if sess, err := h.repo.GetSession(ref); err == nil {
-			Hub.BroadcastEvent("session_update", sess)
-		}
-	}
-
-	// Step 16a: Send PFCP Session Modification Request to UPF (UDP)
-	logger.Log.Info("SMF: Starting Step 16a (PFCP Session Modification to UPF)", zap.String("ref", ref))
-	
-	// We can use a unique sequence number for the modification request
-	_, err = Orc.pfcpClient.SendSessionModificationRequest(session.IPAddress, uint32(session.PduSessionID)+1000)
-	if err != nil {
-		logger.Log.Error("SMF: PFCP Session Modification failed", zap.Error(err))
-		h.repo.UpdateSessionStatus(ref, "FAILED")
-		if Hub != nil {
-			if sess, err := h.repo.GetSession(ref); err == nil {
-				Hub.BroadcastEvent("session_update", sess)
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(models.UpdateSMContextResponse{
-			UpCnxState: "ERROR",
-			Cause:      "PFCP_MODIFICATION_FAILED",
-		})
-		return
-	}
-
-	// Step 16b: Received Response, update status to CONNECTED
-	logger.Log.Info("SMF: Received Step 16b (PFCP Session Modification Response OK)", zap.String("ref", ref))
-	h.repo.UpdateSessionStatus(ref, "CONNECTED")
-	if Hub != nil {
-		if sess, err := h.repo.GetSession(ref); err == nil {
-			Hub.BroadcastEvent("session_update", sess)
-		}
-	}
-
-	// Step 17: SMF responds 200 OK to AMF
-	logger.Log.Info("SMF: Replying to AMF UpdateSMContext (Step 17)", zap.String("ref", ref))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(models.UpdateSMContextResponse{
-		UpCnxState: "ACTIVATED",
+		UpCnxState: req.UpCnxState,
 		Cause:      "REQUEST_ACCEPTED",
 	})
 }
@@ -242,7 +202,7 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) TriggerProxy(w http.ResponseWriter, r *http.Request) {
 	logger.Log.Info("SMF: Proxying trigger request to AMF")
-	
+
 	// Read payload
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -278,4 +238,14 @@ func (h *Handler) TriggerProxy(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ServeDashboard(w http.ResponseWriter, r *http.Request) {
 	// Simple index handler will be served by file server, but fallback is here
 	http.ServeFile(w, r, "web/index.html")
+}
+
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	active, pending, failed := h.repo.CountByStatus()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"active":  active,
+		"pending": pending,
+		"failed":  failed,
+	})
 }

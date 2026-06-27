@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,17 +14,27 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"smf/internal/udm"
+	"smf/pkg/config"
 	"smf/pkg/logger"
 )
 
 func main() {
+	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
 	logger.InitLogger()
 	defer logger.Log.Sync()
 
-	logger.Log.Info("Starting UDM Network Function...")
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
 
-	connStr := os.Getenv("DATABASE_URL")
-	repo := udm.InitSubscriberRepository(connStr)
+	logger.Log.Info("Starting UDM Network Function...",
+		zap.String("listenAddr", cfg.UDM.ListenAddr))
+
+	repo := udm.InitSubscriberRepository(cfg.UDM.DatabaseUrl)
 	handler := udm.NewHandler(repo)
 
 	mux := http.NewServeMux()
@@ -31,12 +43,12 @@ func main() {
 
 	h2s := &http2.Server{}
 	server := &http.Server{
-		Addr:    ":8082",
+		Addr:    cfg.UDM.ListenAddr,
 		Handler: h2c.NewHandler(mux, h2s),
 	}
 
 	go func() {
-		logger.Log.Info("UDM HTTP/2 h2c server listening on port 8082")
+		logger.Log.Info("UDM HTTP/2 h2c server listening", zap.String("addr", cfg.UDM.ListenAddr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("UDM Server failed to start", zap.Error(err))
 		}

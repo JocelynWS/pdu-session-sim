@@ -1,0 +1,19 @@
+amf:
+  listenAddr: ":8080"
+  smfBaseUrl: "http://localhost:8081"
+
+smf:
+  listenAddr: ":8081"
+  databaseUrl: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+  upfAddr: "localhost:8805"
+  maxWorkers: 20
+  queueSize: 2000 
+  webDir: "web"
+
+udm:
+  listenAddr: ":8082"
+  databaseUrl: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+
+upf:
+  pfcpAddr: ":8805"
+  httpAddr: ":8083"

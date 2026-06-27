@@ -1,6 +1,8 @@
 package logger
 
 import (
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
@@ -17,11 +19,23 @@ func InitLogger() {
 
 	// Use console encoder (colored) instead of json for local simulation readability
 	consoleEncoder := zapcore.NewConsoleEncoder(config.EncoderConfig)
-	
+
+	level := zap.DebugLevel
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = zap.DebugLevel
+	case "info":
+		level = zap.InfoLevel
+	case "warn", "warning":
+		level = zap.WarnLevel
+	case "error":
+		level = zap.ErrorLevel
+	}
+
 	core := zapcore.NewCore(
 		consoleEncoder,
 		zapcore.Lock(os.Stdout),
-		zap.DebugLevel,
+		level,
 	)
 
 	Log = zap.New(core)

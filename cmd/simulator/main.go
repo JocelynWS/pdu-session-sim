@@ -8,8 +8,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 )
+
+// newCmd creates a command that runs in its own process group,
+// so that killCmd can kill all child processes (including go run's compiled binary).
+func newCmd(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
+}
 
 func main() {
 	fmt.Println("==================================================")
@@ -21,9 +32,7 @@ func main() {
 
 	// 1. Start Network Functions
 	fmt.Println("[+] Starting UDM on Port 8082...")
-	udmCmd := exec.Command("go", "run", "cmd/udm/main.go")
-	udmCmd.Stdout = os.Stdout
-	udmCmd.Stderr = os.Stderr
+	udmCmd := newCmd("go", "run", "cmd/udm/main.go")
 	if err := udmCmd.Start(); err != nil {
 		fmt.Printf("[-] Failed to start UDM: %v\n", err)
 		return
@@ -31,9 +40,7 @@ func main() {
 	defer killCmd(udmCmd, "UDM")
 
 	fmt.Println("[+] Starting UPF on UDP 8805 / HTTP 8083...")
-	upfCmd := exec.Command("go", "run", "cmd/upf/main.go")
-	upfCmd.Stdout = os.Stdout
-	upfCmd.Stderr = os.Stderr
+	upfCmd := newCmd("go", "run", "cmd/upf/main.go")
 	if err := upfCmd.Start(); err != nil {
 		fmt.Printf("[-] Failed to start UPF: %v\n", err)
 		return
@@ -41,7 +48,7 @@ func main() {
 	defer killCmd(upfCmd, "UPF")
 
 	fmt.Println("[+] Starting SMF on Port 8081...")
-	smfCmd := exec.Command("go", "run", "cmd/smf/main.go")
+	smfCmd := newCmd("go", "run", "cmd/smf/main.go")
 	smfCmd.Stdout = os.Stdout
 	smfCmd.Stderr = os.Stderr
 	if err := smfCmd.Start(); err != nil {
@@ -51,9 +58,7 @@ func main() {
 	defer killCmd(smfCmd, "SMF")
 
 	fmt.Println("[+] Starting AMF on Port 8080...")
-	amfCmd := exec.Command("go", "run", "cmd/amf/main.go")
-	amfCmd.Stdout = os.Stdout
-	amfCmd.Stderr = os.Stderr
+	amfCmd := newCmd("go", "run", "cmd/amf/main.go")
 	if err := amfCmd.Start(); err != nil {
 		fmt.Printf("[-] Failed to start AMF: %v\n", err)
 		return
@@ -133,24 +138,22 @@ func checkHealth(url string, name string) bool {
 }
 
 func killCmd(cmd *exec.Cmd, name string) {
-	if cmd.Process != nil {
-		fmt.Printf("[*] Stopping %s...\n", name)
-		// Send interrupt signal for graceful shutdown
-		cmd.Process.Signal(os.Interrupt)
-		
-		// Wait or kill
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-		
-		select {
-		case <-done:
-			// exited cleanly
-		case <-time.After(2 * time.Second):
-			// force kill
-			cmd.Process.Kill()
-		}
-		fmt.Printf("[+] Stopped %s\n", name)
+	if cmd.Process == nil {
+		return
 	}
+	fmt.Printf("[*] Stopping %s (pid=%d)...\n", name, cmd.Process.Pid)
+
+	// Kill the entire process group (negative pgid) so both
+	// the `go run` wrapper AND the compiled binary child are terminated.
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err == nil {
+		syscall.Kill(-pgid, syscall.SIGKILL)
+	} else {
+		// Fallback: kill just the direct process
+		cmd.Process.Kill()
+	}
+
+	// Reap zombie to release resources
+	cmd.Wait()
+	fmt.Printf("[+] Stopped %s\n", name)
 }

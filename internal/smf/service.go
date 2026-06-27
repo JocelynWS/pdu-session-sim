@@ -48,7 +48,7 @@ type Orchestrator struct {
 
 var Orc *Orchestrator
 
-func InitOrchestrator(repo SessionRepository, pfcpClient *PFCPClient, maxWorkers int) {
+func InitOrchestrator(repo SessionRepository, pfcpClient *PFCPClient, maxWorkers int, queueSize int) {
 	// Set up cleartext HTTP/2 client (h2c)
 	tr := &http2.Transport{
 		AllowHTTP: true,
@@ -65,7 +65,7 @@ func InitOrchestrator(repo SessionRepository, pfcpClient *PFCPClient, maxWorkers
 		repo:       repo,
 		pfcpClient: pfcpClient,
 		h2Client:   h2Client,
-		jobQueue:   make(chan Job, 5000),
+		jobQueue:   make(chan Job, queueSize),
 		stopChan:   make(chan struct{}),
 		ipCounter:  0x0a0b1601, // 10.11.22.1 (ip binary)
 	}
@@ -103,7 +103,12 @@ func (o *Orchestrator) QueueJob(job Job) {
 	select {
 	case o.jobQueue <- job:
 	default:
+		// Queue đầy: gạch tên session trong DB thành FAILED ngay lập tức
+		// để tránh tình trạng session nằm PENDING vĩnh viễn không ai xử lý
 		logger.Log.Warn("SMF: Job queue full, dropping job", zap.String("ref", job.SMContextRef))
+		o.repo.UpdateSessionStatus(job.SMContextRef, "FAILED")
+		o.NotifyAMFSessionFailure(job.SMContextRef, job.SUPI, "SMF_QUEUE_FULL", "SMF worker queue is full")
+		atomic.AddUint64(&o.failCounter, 1)
 	}
 }
 
@@ -127,6 +132,7 @@ func (o *Orchestrator) worker(id int) {
 				logger.Log.Error("SMF: Establishment background task failed",
 					zap.String("ref", job.SMContextRef), zap.Error(err))
 				o.repo.UpdateSessionStatus(job.SMContextRef, "FAILED")
+				o.NotifyAMFSessionFailure(job.SMContextRef, job.SUPI, "E2E_ESTABLISHMENT_FAILED", err.Error())
 				// Broadcast session failure to dashboard
 				if Hub != nil {
 					if sess, getErr := o.repo.GetSession(job.SMContextRef); getErr == nil {
@@ -145,7 +151,7 @@ func (o *Orchestrator) worker(id int) {
 func (o *Orchestrator) processEstablishment(ref string, supi string, ip string) error {
 	// Step 10a: Send PFCP Session Establishment Request to UPF
 	logger.Log.Info("SMF: Starting Step 10a (PFCP Establishment to UPF)", zap.String("ref", ref))
-	
+
 	// Track state: CREATING
 	o.repo.UpdateSessionStatus(ref, "CREATING")
 	if Hub != nil {
@@ -170,7 +176,7 @@ func (o *Orchestrator) processEstablishment(ref string, supi string, ip string) 
 
 	// Step 11: SMF -> AMF: N1N2 Message Transfer
 	logger.Log.Info("SMF: Starting Step 11 (N1N2 Message Transfer to AMF)", zap.String("ref", ref))
-	
+
 	session, err := o.repo.GetSession(ref)
 	if err != nil {
 		return err
@@ -182,7 +188,10 @@ func (o *Orchestrator) processEstablishment(ref string, supi string, ip string) 
 			Sst: session.SST,
 			Sd:  session.SD,
 		},
-		Dnn: session.DNN,
+		Dnn:          session.DNN,
+		SMContextRef: ref,
+		Status:       "ACTIVE",
+		Cause:        "REQUEST_ACCEPTED",
 	}
 
 	bodyBytes, err := json.Marshal(n1n2)
@@ -209,6 +218,70 @@ func (o *Orchestrator) processEstablishment(ref string, supi string, ip string) 
 
 	logger.Log.Info("SMF: N1N2 Callback successful, Step 11 completed", zap.String("ref", ref))
 	return nil
+}
+
+func (o *Orchestrator) NotifyAMFSessionFailure(ref string, supi string, cause string, message string) {
+	session, err := o.repo.GetSession(ref)
+	if err != nil {
+		logger.Log.Warn("SMF: Cannot notify AMF about failed session because session is missing",
+			zap.String("ref", ref),
+			zap.String("cause", cause),
+			zap.Error(err))
+		return
+	}
+
+	n1n2 := models.N1N2MessageTransfer{
+		PduSessionId: session.PduSessionID,
+		SNssai: models.SNssai{
+			Sst: session.SST,
+			Sd:  session.SD,
+		},
+		Dnn:          session.DNN,
+		SMContextRef: ref,
+		Status:       "FAILED",
+		Cause:        cause,
+		Message:      message,
+	}
+
+	bodyBytes, err := json.Marshal(n1n2)
+	if err != nil {
+		logger.Log.Error("SMF: Failed to marshal AMF failure notification",
+			zap.String("ref", ref),
+			zap.Error(err))
+		return
+	}
+
+	url := fmt.Sprintf("http://localhost:8080/namf-comm/v1/ue-context/%s/n1-n2-messages", supi)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		logger.Log.Error("SMF: Failed to create AMF failure notification",
+			zap.String("ref", ref),
+			zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.h2Client.Do(req)
+	if err != nil {
+		logger.Log.Error("SMF: AMF failure notification failed",
+			zap.String("ref", ref),
+			zap.String("cause", cause),
+			zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Log.Error("SMF: AMF rejected failure notification",
+			zap.String("ref", ref),
+			zap.String("cause", cause),
+			zap.Int("status", resp.StatusCode))
+		return
+	}
+
+	logger.Log.Info("SMF: Notified AMF about failed session",
+		zap.String("ref", ref),
+		zap.String("cause", cause))
 }
 
 func (o *Orchestrator) metricsReporter() {

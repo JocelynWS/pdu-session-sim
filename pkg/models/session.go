@@ -37,6 +37,10 @@ type N1N2MessageTransfer struct {
 	PduSessionId int    `json:"pduSessionId"`
 	SNssai       SNssai `json:"sNssai"`
 	Dnn          string `json:"dnn"`
+	SMContextRef string `json:"smContextRef,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Cause        string `json:"cause,omitempty"`
+	Message      string `json:"message,omitempty"`
 }
 
 type SubscriptionData struct {

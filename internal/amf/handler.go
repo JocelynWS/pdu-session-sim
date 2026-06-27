@@ -163,11 +163,32 @@ func (h *Handler) ReceiveN1N2Callback(w http.ResponseWriter, r *http.Request) {
 
 	logger.Log.Info("AMF: Received N1N2 Message Transfer Callback (Step 11)",
 		zap.String("imsi", imsi),
-		zap.Int("pduSessionId", n1n2.PduSessionId))
+		zap.Int("pduSessionId", n1n2.PduSessionId),
+		zap.String("status", n1n2.Status),
+		zap.String("cause", n1n2.Cause))
 
 	h.mu.RLock()
 	ref, exists := h.sessions[imsi]
 	h.mu.RUnlock()
+
+	if n1n2.Status == "FAILED" {
+		if n1n2.SMContextRef != "" {
+			ref = n1n2.SMContextRef
+			h.mu.Lock()
+			h.sessions[imsi] = ref
+			h.mu.Unlock()
+		}
+
+		logger.Log.Warn("AMF: PDU Session establishment failed",
+			zap.String("imsi", imsi),
+			zap.String("smContextRef", ref),
+			zap.String("cause", n1n2.Cause),
+			zap.String("message", n1n2.Message))
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+		return
+	}
 
 	if !exists {
 		logger.Log.Warn("AMF: Received N1N2 callback for unknown IMSI session", zap.String("imsi", imsi))

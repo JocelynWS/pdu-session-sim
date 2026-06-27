@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -13,38 +14,40 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"smf/internal/smf"
+	"smf/pkg/config"
 	"smf/pkg/logger"
 )
 
 func main() {
+	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
 	logger.InitLogger()
 	defer logger.Log.Sync()
 
-	logger.Log.Info("Starting SMF Network Function...")
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger.Log.Info("Starting SMF Network Function...",
+		zap.String("listenAddr", cfg.SMF.ListenAddr),
+		zap.String("upfAddr", cfg.SMF.UpfAddr),
+		zap.Int("maxWorkers", cfg.SMF.MaxWorkers))
 
 	// 1. Initialize Database Repository (Postgres or In-Memory fallback)
-	connStr := os.Getenv("DATABASE_URL")
-	repo := smf.InitRepository(connStr)
+	repo := smf.InitRepository(cfg.SMF.DatabaseUrl)
 
-	// 2. Initialize PFCP client (communicates with UPF UDP on 8805)
-	upfAddr := os.Getenv("UPF_ADDR")
-	if upfAddr == "" {
-		upfAddr = "localhost:8805"
-	}
-	pfcpClient, err := smf.NewPFCPClient(upfAddr)
+	// 2. Initialize PFCP client
+	pfcpClient, err := smf.NewPFCPClient(cfg.SMF.UpfAddr)
 	if err != nil {
 		logger.Log.Fatal("SMF: Failed to initialize PFCP UDP client", zap.Error(err))
 	}
 	defer pfcpClient.Close()
 
 	// 3. Initialize Worker Pool Orchestrator
-	maxWorkers := 20
-	if workersStr := os.Getenv("MAX_WORKERS"); workersStr != "" {
-		if w, err := strconv.Atoi(workersStr); err == nil {
-			maxWorkers = w
-		}
-	}
-	smf.InitOrchestrator(repo, pfcpClient, maxWorkers)
+	smf.InitOrchestrator(repo, pfcpClient, cfg.SMF.MaxWorkers, cfg.SMF.QueueSize)
 	defer smf.Orc.Stop()
 
 	// 4. Initialize Dashboard SSE stream hub
@@ -58,22 +61,23 @@ func main() {
 	mux.HandleFunc("POST /nsmf-pdusession/v1/sm-contexts/{smContextRef}/modify", handler.UpdateSMContext)
 	mux.HandleFunc("POST /api/trigger", handler.TriggerProxy)
 	mux.HandleFunc("GET /api/sessions", handler.GetSessions)
+	mux.HandleFunc("GET /api/stats", handler.GetStats)
 
 	// Serve the real-time SSE stream for dashboard
 	mux.Handle("GET /dashboard/stream", smf.Hub)
-	
+
 	// Serve static files for dashboard frontend
-	fs := http.FileServer(http.Dir("web"))
+	fs := http.FileServer(http.Dir(cfg.SMF.WebDir))
 	mux.Handle("GET /dashboard/", http.StripPrefix("/dashboard/", fs))
 
 	h2s := &http2.Server{}
 	server := &http.Server{
-		Addr:    ":8081",
+		Addr:    cfg.SMF.ListenAddr,
 		Handler: h2c.NewHandler(mux, h2s),
 	}
 
 	go func() {
-		logger.Log.Info("SMF HTTP/2 h2c server listening on port 8081")
+		logger.Log.Info("SMF HTTP/2 h2c server listening", zap.String("addr", cfg.SMF.ListenAddr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("SMF Server failed to start", zap.Error(err))
 		}
