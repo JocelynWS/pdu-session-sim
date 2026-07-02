@@ -10,3 +10,4 @@ data:
   MAX_WORKERS: "50"
   QUEUE_SIZE: "50000"
   LOG_LEVEL: "info"
+  GOMEMLIMIT: "900MiB"
