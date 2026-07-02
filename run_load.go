@@ -12,9 +12,10 @@ import (
 )
 
 type Stats struct {
-	Active  int64 `json:"active"`
-	Pending int64 `json:"pending"`
-	Failed  int64 `json:"failed"`
+	Active           int64            `json:"active"`
+	Pending          int64            `json:"pending"`
+	Failed           int64            `json:"failed"`
+	FailureBreakdown map[string]int64 `json:"failureBreakdown"`
 }
 
 func main() {
@@ -33,7 +34,7 @@ func main() {
 	}`)
 
 	client := &http.Client{
-		Timeout: 3 * time.Second,
+		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        5000,
 			MaxIdleConnsPerHost: 5000,
@@ -143,6 +144,14 @@ Loop:
 			fmt.Printf("Số Sessions hoàn thành (ACTIVE): %d\n", stats.Active)
 			fmt.Printf("Số Sessions lỗi (FAILED):        %d\n", stats.Failed)
 			fmt.Printf("TRUE E2E TPS:                    %.2f req/s\n", float64(stats.Active)/e2eDuration)
+			if len(stats.FailureBreakdown) > 0 {
+				fmt.Println("--------------------------------------------------")
+				fmt.Println("PHÂN TÍCH NGUYÊN NHÂN LỖI:")
+				for reason, count := range stats.FailureBreakdown {
+					pct := float64(count) / float64(stats.Failed) * 100
+					fmt.Printf("  %-35s %d (%.1f%%)\n", reason, count, pct)
+				}
+			}
 			fmt.Println("==================================================")
 			break
 		}

@@ -50,17 +50,18 @@ type SubscriptionData struct {
 }
 
 type PDUSession struct {
-	SMContextRef string    `json:"smContextRef"`
-	SUPI         string    `json:"supi"`
-	GPSI         string    `json:"gpsi"`
-	PduSessionID int       `json:"pduSessionId"`
-	DNN          string    `json:"dnn"`
-	SST          int       `json:"sst"`
-	SD           string    `json:"sd"`
-	ServingNfID  string    `json:"servingNfId"`
-	AnType       string    `json:"anType"`
-	Status       string    `json:"status"`
-	IPAddress    string    `json:"ipAddress"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	SMContextRef  string    `json:"smContextRef"`
+	SUPI          string    `json:"supi"`
+	GPSI          string    `json:"gpsi"`
+	PduSessionID  int       `json:"pduSessionId"`
+	DNN           string    `json:"dnn"`
+	SST           int       `json:"sst"`
+	SD            string    `json:"sd"`
+	ServingNfID   string    `json:"servingNfId"`
+	AnType        string    `json:"anType"`
+	Status        string    `json:"status"`
+	IPAddress     string    `json:"ipAddress"`
+	FailureReason string    `json:"failureReason,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }

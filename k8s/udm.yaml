@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: udm
+  namespace: 5gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: udm
+  template:
+    metadata:
+      labels:
+        app: udm
+    spec:
+      containers:
+        - name: udm
+          image: 5gc-nf:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/udm"]
+          ports:
+            - containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: 5gc-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: udm
+  namespace: 5gc
+spec:
+  selector:
+    app: udm
+  ports:
+    - protocol: TCP
+      port: 8082
+      targetPort: 8082

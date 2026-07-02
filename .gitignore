@@ -46,6 +46,7 @@ go.work.sum
 # Note files
 *.PDF
 *.docx
+*.doc
 
 # Docker files
 Dockerfile

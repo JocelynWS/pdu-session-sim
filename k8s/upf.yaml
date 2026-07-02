@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upf
+  namespace: 5gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upf
+  template:
+    metadata:
+      labels:
+        app: upf
+    spec:
+      containers:
+        - name: upf
+          image: 5gc-nf:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/upf"]
+          ports:
+            - containerPort: 8805
+              protocol: UDP
+            - containerPort: 8083
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: 5gc-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upf
+  namespace: 5gc
+spec:
+  selector:
+    app: upf
+  ports:
+    - name: pfcp
+      protocol: UDP
+      port: 8805
+      targetPort: 8805
+    - name: http
+      protocol: TCP
+      port: 8083
+      targetPort: 8083

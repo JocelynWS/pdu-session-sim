@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: 5gc-config
+  namespace: 5gc
+data:
+  DATABASE_URL: "postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable"
+  UPF_ADDR: "upf:8805"
+  SMF_BASE_URL: "http://smf:8081"
+  MAX_WORKERS: "50"
+  QUEUE_SIZE: "50000"
+  LOG_LEVEL: "info"

@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-script
+  namespace: 5gc
+data:
+  001_init.sql: |
+    -- Table for Subscriber Profile (used by UDM)
+    CREATE TABLE IF NOT EXISTS subscribers (
+        imsi VARCHAR(50) PRIMARY KEY,
+        dnn VARCHAR(50) NOT NULL,
+        sst INT NOT NULL,
+        sd VARCHAR(10) NOT NULL
+    );
+
+    -- Table for PDU Sessions (used by SMF)
+    CREATE TABLE IF NOT EXISTS pdu_sessions (
+        sm_context_ref VARCHAR(100) PRIMARY KEY,
+        supi VARCHAR(50) NOT NULL,
+        gpsi VARCHAR(50) NOT NULL,
+        pdu_session_id INT NOT NULL,
+        dnn VARCHAR(50) NOT NULL,
+        sst INT NOT NULL,
+        sd VARCHAR(10) NOT NULL,
+        serving_nf_id VARCHAR(100) NOT NULL,
+        an_type VARCHAR(50) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        ip_address VARCHAR(50) NOT NULL,
+        failure_reason VARCHAR(100) DEFAULT '',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Seed UDM with test subscribers
+    INSERT INTO subscribers (imsi, dnn, sst, sd)
+    VALUES 
+    ('imsi-452040000000001', 'v-internet', 1, '000001'),
+    ('imsi-452040000000002', 'v-internet', 1, '000002'),
+    ('imsi-452040000000003', 'v-internet', 2, '000003')
+    ON CONFLICT (imsi) DO NOTHING;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: 5gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: postgres
+          volumeMounts:
+            - name: init-script
+              mountPath: /docker-entrypoint-initdb.d/001_init.sql
+              subPath: 001_init.sql
+      volumes:
+        - name: init-script
+          configMap:
+            name: postgres-init-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: 5gc
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

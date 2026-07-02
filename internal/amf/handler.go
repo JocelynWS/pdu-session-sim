@@ -2,17 +2,13 @@ package amf
 
 import (
 	"bytes"
-	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/net/http2"
 	"smf/pkg/logger"
 	"smf/pkg/models"
 )
@@ -26,11 +22,9 @@ type Handler struct {
 }
 
 func NewHandler(smfBaseUrl string) *Handler {
-	tr := &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-			return net.Dial(network, addr)
-		},
+	tr := &http.Transport{
+		MaxIdleConns:        2000,
+		MaxIdleConnsPerHost: 2000,
 	}
 	client := &http.Client{
 		Transport: tr,

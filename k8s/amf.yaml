@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amf
+  namespace: 5gc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: amf
+  template:
+    metadata:
+      labels:
+        app: amf
+    spec:
+      containers:
+        - name: amf
+          image: 5gc-nf:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/amf"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: 5gc-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amf
+  namespace: 5gc
+spec:
+  type: NodePort
+  selector:
+    app: amf
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080

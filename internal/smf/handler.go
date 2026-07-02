@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 	"smf/pkg/logger"
@@ -38,108 +39,43 @@ func (h *Handler) CreateSMContext(w http.ResponseWriter, r *http.Request) {
 		zap.String("dnn", req.Dnn),
 		zap.Int("pduSessionId", req.PduSessionId))
 
-	// Generate internal smContextRef (không cần UUID, chỉ dùng nội bộ)
-	ref := fmt.Sprintf("smctx-%d", atomic.AddUint64(&smContextCounter, 1))
-
-	// Save session in DB as PENDING
-	session := &models.PDUSession{
-		SMContextRef: ref,
-		SUPI:         req.Supi,
-		GPSI:         req.Gpsi,
-		PduSessionID: req.PduSessionId,
-		DNN:          req.Dnn,
-		SST:          req.SNssai.Sst,
-		SD:           req.SNssai.Sd,
-		ServingNfID:  req.ServingNfId,
-		AnType:       req.AnType,
-		Status:       "PENDING",
-		IPAddress:    "",
-	}
-
-	if err := h.repo.SaveSession(session); err != nil {
-		logger.Log.Error("SMF: Failed to save session to DB", zap.Error(err))
-		http.Error(w, "database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast initial PENDING state to dashboard
-	if Hub != nil {
-		Hub.BroadcastEvent("session_update", session)
-	}
-
-	// Step 4: SMF -> UDM: Subscription retrieval
-	logger.Log.Info("SMF: Querying UDM for subscriber profile (Step 4)", zap.String("supi", req.Supi))
-
-	udmUrl := fmt.Sprintf("http://localhost:8082/nudm-sdm/v2/%s/sm-data", req.Supi)
-	udmReq, err := http.NewRequest("GET", udmUrl, nil)
-	if err != nil {
-		logger.Log.Error("SMF: Failed to create UDM request", zap.Error(err))
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "INTERNAL_ERROR", err.Error())
-		h.failSession(w, ref, "INTERNAL_ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	udmResp, err := Orc.h2Client.Do(udmReq)
-	if err != nil {
-		logger.Log.Error("SMF: Failed to communicate with UDM", zap.Error(err))
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "UDM_UNAVAILABLE", err.Error())
-		h.failSession(w, ref, "UDM_UNAVAILABLE", http.StatusServiceUnavailable)
-		return
-	}
-	defer udmResp.Body.Close()
-
-	if udmResp.StatusCode == http.StatusNotFound {
-		logger.Log.Warn("SMF: UDM returned subscriber not found (404)")
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "SUBSCRIPTION_NOT_FOUND", "UDM returned subscriber not found")
-		h.failSession(w, ref, "SUBSCRIPTION_NOT_FOUND", http.StatusNotFound)
-		return
-	}
-
-	if udmResp.StatusCode != http.StatusOK {
-		logger.Log.Error("SMF: UDM returned unexpected status", zap.Int("status", udmResp.StatusCode))
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "UDM_ERROR", fmt.Sprintf("UDM returned HTTP %d", udmResp.StatusCode))
-		h.failSession(w, ref, "UDM_ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	var subData models.SubscriptionData
-	if err := json.NewDecoder(udmResp.Body).Decode(&subData); err != nil {
-		logger.Log.Error("SMF: Failed to decode UDM response", zap.Error(err))
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "INTERNAL_ERROR", err.Error())
-		h.failSession(w, ref, "INTERNAL_ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	// Validate dnn + sNssai
-	if subData.Dnn != req.Dnn || subData.SNssai.Sst != req.SNssai.Sst || subData.SNssai.Sd != req.SNssai.Sd {
-		logger.Log.Warn("SMF: Subscription data mismatch",
-			zap.String("reqDnn", req.Dnn), zap.String("subDnn", subData.Dnn),
-			zap.Int("reqSst", req.SNssai.Sst), zap.Int("subSst", subData.SNssai.Sst),
-			zap.String("reqSd", req.SNssai.Sd), zap.String("subSd", subData.SNssai.Sd))
-		Orc.NotifyAMFSessionFailure(ref, req.Supi, "SUBSCRIPTION_MISMATCH", "UDM subscription data does not match requested DNN/S-NSSAI")
-		h.failSession(w, ref, "SUBSCRIPTION_MISMATCH", http.StatusBadRequest)
-		return
-	}
-
-	logger.Log.Info("SMF: Subscription validated successfully. Replying to AMF (Step 5)", zap.String("ref", ref))
-
-	// Step 5: Respond 201 Created to AMF
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(models.CreateSMContextResponse{
-		SmContextRef: ref,
-		Cause:        "REQUEST_ACCEPTED",
-	})
+	// Generate internal smContextRef using timestamp to avoid PK collisions across pod restarts
+	ref := fmt.Sprintf("smctx-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&smContextCounter, 1))
 
 	// Allocate IP address
 	allocatedIP := Orc.AllocateIP()
 
 	// Asynchronously kick off the rest of the flow via worker pool
-	Orc.QueueJob(Job{
+	enqueued := Orc.EnqueueJob(Job{
 		Type:         JobEstablish,
 		SMContextRef: ref,
 		SUPI:         req.Supi,
 		IPAddress:    allocatedIP,
+		PduSessionID: req.PduSessionId,
+		DNN:          req.Dnn,
+		SST:          req.SNssai.Sst,
+		SD:           req.SNssai.Sd,
+		GPSI:         req.Gpsi,
+		ServingNfID:  req.ServingNfId,
+		AnType:       req.AnType,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	if !enqueued {
+		// 3GPP Standard Load Shedding: Trả về HTTP 503/403 (Congestion) ngay lập tức
+		logger.Log.Warn("SMF: Job queue full, rejecting request immediately", zap.String("ref", ref))
+		w.WriteHeader(http.StatusServiceUnavailable) // HTTP 503
+		json.NewEncoder(w).Encode(models.CreateSMContextResponse{
+			Cause: "SMF_CONGESTION",
+		})
+		return
+	}
+
+	// Step 5: Respond 201 Created to AMF immediately!
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(models.CreateSMContextResponse{
+		SmContextRef: ref,
+		Cause:        "REQUEST_ACCEPTED",
 	})
 }
 
@@ -181,7 +117,7 @@ func (h *Handler) GetSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) failSession(w http.ResponseWriter, ref string, cause string, httpCode int) {
-	h.repo.UpdateSessionStatus(ref, "FAILED")
+	h.repo.UpdateSessionStatusWithReason(ref, "FAILED", cause)
 	if Hub != nil {
 		if sess, err := h.repo.GetSession(ref); err == nil {
 			Hub.BroadcastEvent("session_update", sess)
@@ -212,7 +148,7 @@ func (h *Handler) TriggerProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create request to AMF
-	amfReq, err := http.NewRequest("POST", "http://localhost:8080/trigger", bytes.NewBuffer(bodyBytes))
+	amfReq, err := http.NewRequest("POST", "http://amf:8080/trigger", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		logger.Log.Error("SMF Proxy: Failed to create request to AMF", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -242,10 +178,12 @@ func (h *Handler) ServeDashboard(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	active, pending, failed := h.repo.CountByStatus()
+	failureBreakdown := h.repo.CountByFailureReason()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"active":  active,
-		"pending": pending,
-		"failed":  failed,
+		"active":           active,
+		"pending":          pending,
+		"failed":           failed,
+		"failureBreakdown": failureBreakdown,
 	})
 }

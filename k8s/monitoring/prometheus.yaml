@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: smf-monitor
+  namespace: 5gc
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: smf
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s
