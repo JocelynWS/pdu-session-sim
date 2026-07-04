@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: smf-5gc-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/JocelynWS/pdu-session-sim.git'
+    targetRevision: HEAD
+    path: k8s
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: 5gc
+  syncPolicy:
+    automated:
+      prune: true       # Tự động xóa tài nguyên K8s nếu file yaml bị xóa khỏi Git
+      selfHeal: true    # Tự động sửa lại nếu ai đó thay đổi trực tiếp trên K8s (drift correction)
+    syncOptions:
+      - CreateNamespace=true  # Tự tạo namespace 5gc nếu chưa có

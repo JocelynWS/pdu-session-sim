@@ -200,20 +200,75 @@
             console.log("SSE Ping:", e.data);
         });
 
+        let totalTpsSamples = 0;
+        let sumTps = 0;
+        let sumLatency = 0;
+
         // Handle session updates
         eventSource.addEventListener('session_update', (e) => {
             const sess = JSON.parse(e.data);
             sessions.set(sess.smContextRef, sess);
+
+            // Limit to max 100 sessions to avoid browser OOM during high load test
+            if (sessions.size > 100) {
+                const firstKey = sessions.keys().next().value;
+                sessions.delete(firstKey);
+            }
+
             updateSessionTable();
             animateFlow(sess);
-            logEvent("SMF", `Session ${sess.smContextRef.substring(9, 17)}... status changed to ${sess.status} [IP: ${sess.ipAddress || 'None'}]`, "info");
+            
+            // Only log 10% of events during high load to prevent console freeze
+            if (Math.random() < 0.1) {
+                logEvent("SMF", `Session ${sess.smContextRef.substring(9, 17)}... status changed to ${sess.status} [IP: ${sess.ipAddress || 'None'}]`, "info");
+            }
         });
 
         // Handle metrics updates
         eventSource.addEventListener('metrics', (e) => {
             const metrics = JSON.parse(e.data);
-            document.getElementById('valTps').textContent = metrics.tps;
-            document.getElementById('valLatency').textContent = metrics.avgLatencyMs.toFixed(1) + ' ms';
+            
+            if (metrics.tps > 0) {
+                sumTps += metrics.tps;
+                sumLatency += metrics.avgLatencyMs;
+                totalTpsSamples++;
+                
+                document.getElementById('valTps').textContent = metrics.tps;
+                document.getElementById('valLatency').textContent = metrics.avgLatencyMs.toFixed(1) + ' ms';
+            } else if (totalTpsSamples > 0) {
+                // Test is idle, show average!
+                const avgTps = (sumTps / totalTpsSamples).toFixed(0);
+                const avgLat = (sumLatency / totalTpsSamples).toFixed(1);
+                document.getElementById('valTps').textContent = avgTps + ' (Avg)';
+                document.getElementById('valLatency').textContent = avgLat + ' ms (Avg)';
+                
+                // Fetch latest 100 sessions from DB when test finishes
+                if (totalTpsSamples > 0 && !document.getElementById('valTps').dataset.fetched) {
+                    document.getElementById('valTps').dataset.fetched = "true";
+                    fetch('/api/sessions')
+                        .then(res => res.json())
+                        .then(data => {
+                            sessions.clear();
+                            if (data) {
+                                data.forEach(s => sessions.set(s.smContextRef, s));
+                            }
+                            updateSessionTable();
+                            logEvent("SYS", `Fetched latest ${sessions.size} sessions from Database.`, "success");
+                        });
+                }
+                
+                // Reset accumulators if idle for more than 5 seconds
+                setTimeout(() => {
+                    if (document.getElementById('valTps').textContent.includes('Avg')) {
+                        totalTpsSamples = 0; sumTps = 0; sumLatency = 0;
+                        document.getElementById('valTps').dataset.fetched = "";
+                    }
+                }, 5000);
+            } else {
+                document.getElementById('valTps').textContent = '0';
+                document.getElementById('valLatency').textContent = '0 ms';
+            }
+
             document.getElementById('valSuccess').textContent = metrics.successCount;
             document.getElementById('valFailed').textContent = metrics.failCount;
         });

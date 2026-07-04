@@ -214,7 +214,7 @@ func (r *PostgresRepository) UpdateSessionStatusAndIP(ref string, status string,
 func (r *PostgresRepository) GetAllSessions() ([]*models.PDUSession, error) {
 	query := `
 		SELECT sm_context_ref, supi, gpsi, pdu_session_id, dnn, sst, sd, serving_nf_id, an_type, status, ip_address, failure_reason, created_at, updated_at
-		FROM pdu_sessions ORDER BY created_at DESC
+		FROM pdu_sessions ORDER BY created_at DESC LIMIT 100
 	`
 	rows, err := r.pool.Query(context.Background(), query)
 	if err != nil {

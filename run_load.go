@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,9 @@ func main() {
 	var errorCount int64
 	var wg sync.WaitGroup
 
+	var latencies []float64
+	var mu sync.Mutex
+
 	// Batch-per-tick: mỗi 10ms bắn 1 batch
 	// 2500 TPS / 100 tick/giây = 25 requests/tick
 	tickInterval := 10 * time.Millisecond
@@ -73,7 +77,10 @@ Loop:
 					req, _ := http.NewRequest("POST", "http://localhost:8080/trigger", bytes.NewBuffer(payload))
 					req.Header.Set("Content-Type", "application/json")
 
+					start := time.Now()
 					resp, err := client.Do(req)
+					latency := time.Since(start).Seconds() * 1000 // Convert to ms
+
 					if err != nil {
 						atomic.AddInt64(&errorCount, 1)
 						return
@@ -82,6 +89,9 @@ Loop:
 
 					if resp.StatusCode == http.StatusCreated {
 						atomic.AddInt64(&successCount, 1)
+						mu.Lock()
+						latencies = append(latencies, latency)
+						mu.Unlock()
 					} else {
 						atomic.AddInt64(&errorCount, 1)
 					}
@@ -104,6 +114,17 @@ Loop:
 	fmt.Printf("Gửi Thành công: %d (%.2f%%)\n", successCount, float64(successCount)/float64(totalReq)*100)
 	fmt.Printf("Lỗi/Timeout:    %d (%.2f%%)\n", errorCount, float64(errorCount)/float64(totalReq)*100)
 	fmt.Printf("Ingress TPS:    %.2f req/s\n", float64(successCount)/actualDuration)
+
+	if len(latencies) > 0 {
+		sort.Float64s(latencies)
+		p50 := latencies[int(float64(len(latencies))*0.50)]
+		p90 := latencies[int(float64(len(latencies))*0.90)]
+		p99 := latencies[int(float64(len(latencies))*0.99)]
+		fmt.Println("--------------------------------------------------")
+		fmt.Printf("P50 Latency:    %.2f ms\n", p50)
+		fmt.Printf("P90 Latency:    %.2f ms\n", p90)
+		fmt.Printf("P99 Latency:    %.2f ms\n", p99)
+	}
 	fmt.Println("==================================================")
 
 	// --- ĐO TRUE E2E TPS ---
