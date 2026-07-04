@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: 5gc-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  udm:
+    build: .
+    container_name: 5gc-udm
+    command: /app/udm
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/postgres?sslmode=disable
+    ports:
+      - "8082:8082"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  upf:
+    build: .
+    container_name: 5gc-upf
+    command: /app/upf
+    ports:
+      - "8805:8805/udp"
+      - "8083:8083"
+
+  smf:
+    build: .
+    container_name: 5gc-smf
+    command: /app/smf
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/postgres?sslmode=disable
+      - UPF_ADDR=upf:8805
+      - MAX_WORKERS=30
+      - QUEUE_SIZE=8000
+    ports:
+      - "8081:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+      upf:
+        condition: service_started
+
+  amf:
+    build: .
+    container_name: 5gc-amf
+    command: /app/amf
+    environment:
+      - SMF_BASE_URL=http://smf:8081
+    ports:
+      - "8080:8080"
+    depends_on:
+      - smf

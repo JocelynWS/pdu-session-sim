@@ -48,6 +48,4 @@ go.work.sum
 *.docx
 *.doc
 
-# Docker files
-Dockerfile
-docker-compose.yml
+# Docker files - REMOVED: need to track for CI/CD build
