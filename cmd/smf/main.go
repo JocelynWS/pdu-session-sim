@@ -95,3 +95,4 @@ func main() {
 	}
 	logger.Log.Info("SMF server stopped")
 }
+// smf

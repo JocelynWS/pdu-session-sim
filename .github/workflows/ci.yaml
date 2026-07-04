@@ -8,6 +8,7 @@ on:
       - 'Dockerfile'
       - 'go.mod'
       - 'go.sum'
+      - '.github/workflows/ci.yaml'
 
 env:
   REGISTRY: ghcr.io
